@@ -112,28 +112,84 @@ function startCanvasLoop(){
 async function rebuildProcessedStream(){
   if(!sourceStream)return;
   if(processedStream)processedStream.getTracks().forEach(t=>t.stop());
-  canvas=canvas||document.createElement('canvas');canvas.width=cfg.w;canvas.height=cfg.h;
+  canvas=canvas||document.createElement('canvas');
+  canvas.width=cfg.w; canvas.height=cfg.h;
   ctx=canvas.getContext('2d',{alpha:false});
-  if(!sourceVideo){sourceVideo=document.createElement('video');sourceVideo.muted=true;sourceVideo.playsInline=true;sourceVideo.autoplay=true}
-  sourceVideo.srcObject=sourceStream;await sourceVideo.play().catch(()=>{});startCanvasLoop();
-  const vt=canvas.captureStream(cfg.f).getVideoTracks()[0];
+  if(!sourceVideo){
+    sourceVideo=document.createElement('video');
+    sourceVideo.muted=true;
+    sourceVideo.playsInline=true;
+    sourceVideo.autoplay=true;
+  }
+  sourceVideo.srcObject=sourceStream;
+  await sourceVideo.play().catch(()=>{});
+  startCanvasLoop();
+
+  const canvasStream=canvas.captureStream(cfg.f);
+  const vt=canvasStream.getVideoTracks()[0];
   processedStream=new MediaStream([vt]);
-  const at=sourceStream.getAudioTracks()[0];if(at)processedStream.addTrack(at);
-  $('#video').srcObject=processedStream;$('#empty').style.display='none';
+
+  // Keep the original display audio track. getDisplayMedia only supplies
+  // system/tab/window audio when the browser/source chosen by the user allows it.
+  const at=sourceStream.getAudioTracks()[0];
+  if(at) processedStream.addTrack(at);
+
+  const video=$('#video');
+  video.srcObject=processedStream;
+  video.muted = role==='host';
+  video.volume=1;
+  video.controls=true;
+  $('#empty').style.display='none';
   $('#liveBadge').hidden=false;
+  $('#stopShare').hidden=false;
+
+  // Update existing WebRTC peers with the new quality/audio tracks.
   if(role==='host'){
-    const ids=[...pcs.keys()];pcs.forEach(pc=>pc.close());pcs.clear();ids.forEach(id=>offerFor(id))
+    for(const [id,pc] of pcs){
+      const senders=pc.getSenders();
+      const newVideo=processedStream.getVideoTracks()[0];
+      const newAudio=processedStream.getAudioTracks()[0];
+      const vs=senders.find(s=>s.track && s.track.kind==='video');
+      const as=senders.find(s=>s.track && s.track.kind==='audio');
+      if(vs) await vs.replaceTrack(newVideo);
+      else if(newVideo) pc.addTrack(newVideo,processedStream);
+      if(newAudio){
+        if(as) await as.replaceTrack(newAudio);
+        else pc.addTrack(newAudio,processedStream);
+      }else if(as){
+        await as.replaceTrack(null);
+      }
+    }
   }
 }
 $('#share').onclick=async()=>{
   if(role!=='host')return alert('Somente o criador da sala pode compartilhar a tela.');
   try{
-    sourceStream=await navigator.mediaDevices.getDisplayMedia({video:{width:{ideal:cfg.w,max:cfg.w},height:{ideal:cfg.h,max:cfg.h},frameRate:{ideal:cfg.f,max:cfg.f}},audio:$('#audio').checked});
-    await rebuildProcessedStream();send({type:'host-ready'});
-    sourceStream.getVideoTracks()[0].onended=stop;
+    const wantAudio=$('#audio').checked;
+    sourceStream=await navigator.mediaDevices.getDisplayMedia({
+      video:{
+        width:{ideal:cfg.w,max:cfg.w},
+        height:{ideal:cfg.h,max:cfg.h},
+        frameRate:{ideal:cfg.f,max:cfg.f}
+      },
+      audio:wantAudio
+    });
+    const vt=sourceStream.getVideoTracks()[0];
+    if(!vt)throw new Error('Sem vídeo');
+    await rebuildProcessedStream();
+    send({type:'host-ready',hasAudio:sourceStream.getAudioTracks().length>0});
+    vt.onended=()=>stop(true);
     addMessage('NVS','Você começou a compartilhar a tela.',true);
-  }catch(e){sourceStream=null;alert('Compartilhamento cancelado ou bloqueado pelo navegador.')}
+    if(wantAudio && sourceStream.getAudioTracks().length===0){
+      addMessage('NVS','O navegador não forneceu áudio da tela. Ao escolher a tela/aba, marque a opção de compartilhar áudio.',true);
+    }
+  }catch(e){
+    sourceStream=null;
+    if(e.name!=='AbortError')alert('Não foi possível iniciar o compartilhamento da tela.');
+  }
 };
+$('#stopShare').onclick=()=>stop(true);
+
 $('#camera').onclick=async()=>{
   try{
     if(sourceStream){sourceStream.getTracks().forEach(t=>t.stop());sourceStream=null}
@@ -155,13 +211,21 @@ $('#chatForm').onsubmit=e=>{
   e.preventDefault();const input=$('#chatInput');const text=input.value.trim();if(!text)return;
   send({type:'chat',text,name});input.value='';addMessage(name,text)
 };
-function stop(){
-  if(renderTimer)cancelAnimationFrame(renderTimer);renderTimer=null;
+function stop(notify=false){
+  if(renderTimer)cancelAnimationFrame(renderTimer);
+  renderTimer=null;
   if(sourceStream)sourceStream.getTracks().forEach(t=>t.stop());
   if(processedStream)processedStream.getTracks().forEach(t=>t.stop());
-  pcs.forEach(pc=>pc.close());pcs.clear();sourceStream=null;processedStream=null;sourceVideo=null;canvas=null;ctx=null;
-  $('#video').srcObject=null;$('#empty').style.display='flex';$('#liveBadge').hidden=true;
+  pcs.forEach(pc=>pc.close());pcs.clear();
+  sourceStream=null;processedStream=null;sourceVideo=null;canvas=null;ctx=null;
+  $('#video').srcObject=null;
+  $('#video').muted=true;
+  $('#empty').style.display='flex';
+  $('#liveBadge').hidden=true;
+  $('#stopShare').hidden=true;
+  $('#enableAudio').hidden=true;
   $('#welcomeText').textContent=role==='host'?'Compartilhe sua tela usando a barra de baixo.':'Aguardando o transmissor iniciar a tela.';
+  if(notify && role==='host')send({type:'host-stopped'});
 }
 async function offerFor(id){
   if(!processedStream)return;
@@ -171,6 +235,13 @@ async function offerFor(id){
   pc.onconnectionstatechange=()=>{if(['failed','closed','disconnected'].includes(pc.connectionState)&&pcs.get(id)===pc)pcs.delete(id)};
   pcs.set(id,pc);const offer=await pc.createOffer();await pc.setLocalDescription(offer);send({type:'offer',target:id,offer})
 }
+$('#enableAudio').onclick=async()=>{
+  const video=$('#video');
+  video.muted=false; video.volume=1;
+  try{await video.play();$('#enableAudio').hidden=true}
+  catch{alert('Clique novamente no vídeo para permitir o áudio.')}
+};
+
 ws.onmessage=async e=>{
   const m=JSON.parse(e.data);
   if(m.type==='error'){alert(m.message);return}
@@ -203,9 +274,19 @@ ws.onmessage=async e=>{
   if(m.type==='viewer-left'&&role==='host')$('#count').textContent=(m.count||0)+1;
   if(m.type==='chat')addMessage(m.name||'NVS',m.text||'');
   if(m.type==='host-ready'&&role==='viewer')send({type:'viewer-ready'});
+  if(m.type==='host-stopped'&&role==='viewer'){const v=$('#video');v.srcObject=null;v.muted=true;$('#empty').style.display='flex';$('#liveBadge').hidden=true;$('#enableAudio').hidden=true;$('#welcomeText').textContent='O transmissor parou de compartilhar a tela.';}
   if(m.type==='offer'&&role==='viewer'){
     const pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});pcs.set(m.from,pc);
-    pc.ontrack=e=>{$('#video').srcObject=e.streams[0];$('#empty').style.display='none';$('#liveBadge').hidden=false;$('#welcomeText').textContent='Transmissão ao vivo'};
+    pc.ontrack=e=>{
+      const video=$('#video');
+      video.srcObject=e.streams[0];
+      video.muted=false;
+      video.volume=1;
+      $('#empty').style.display='none';
+      $('#liveBadge').hidden=false;
+      $('#welcomeText').textContent='Transmissão ao vivo';
+      video.play().then(()=>{$('#enableAudio').hidden=true}).catch(()=>{$('#enableAudio').hidden=false});
+    };
     pc.onicecandidate=e=>{if(e.candidate)send({type:'ice',target:m.from,candidate:e.candidate})};
     pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState))pcs.delete(m.from)};
     await pc.setRemoteDescription(m.offer);const ans=await pc.createAnswer();await pc.setLocalDescription(ans);send({type:'answer',target:m.from,answer:ans})

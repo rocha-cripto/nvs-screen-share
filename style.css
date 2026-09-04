@@ -50,3 +50,7 @@ button{cursor:pointer}
 @media(max-width:560px){
   .roombar{padding:0 9px}.room-left{gap:6px}.connection{display:none}.room-code{padding:0 9px}.user-chip{padding:0 7px}.room-actions{gap:5px}.more{width:36px}.stage{padding:8px;height:65vh;min-height:430px}.controlbar{max-width:calc(100% - 18px);overflow:auto}.control{padding:10px}.control span{display:none}.landingmain{padding:12px}.landinghero{min-height:600px}.hero-content{padding:28px}.hero-content h1{letter-spacing:-2px}
 }
+.stopshare{background:#351b21!important;border:1px solid #71333c!important;color:#ff9aa0!important}
+.stopshare:hover{background:#4a2028!important}
+.enable-audio{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:8;border:1px solid #5969ff;border-radius:12px;padding:13px 17px;background:#202b4c;color:#fff;font-weight:900;box-shadow:0 15px 40px #000b}
+.enable-audio:hover{background:#2c3a63}
