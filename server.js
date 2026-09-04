@@ -7,174 +7,108 @@ const PORT = process.env.PORT || 3000;
 const PUBLIC = __dirname;
 const rooms = new Map();
 
-const mime = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'application/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8'
-};
-
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  let file = decodeURIComponent(url.pathname);
+  let f = req.url.split('?')[0];
+  if (f === '/') f = '/index.html';
 
-  if (file === '/' || file === '/health') {
-    if (file === '/health') {
-      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-      return res.end('OK');
-    }
-
-    file = '/index.html';
-  }
-
-  const filePath = path.resolve(PUBLIC, '.' + file);
-
-  if (!filePath.startsWith(path.resolve(PUBLIC))) {
-    res.writeHead(403);
-    return res.end('Forbidden');
-  }
-
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+  const p = path.join(PUBLIC, f);
+  if (!p.startsWith(PUBLIC) || !fs.existsSync(p)) {
     res.writeHead(404);
-    return res.end('Not Found');
+    return res.end('Not found');
   }
+
+  const types = {
+    '.html': 'text/html; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp'
+  };
 
   res.writeHead(200, {
-    'Content-Type': mime[path.extname(filePath)] || 'application/octet-stream',
+    'Content-Type': types[path.extname(p).toLowerCase()] || 'application/octet-stream',
     'Cache-Control': 'no-cache'
   });
 
-  fs.createReadStream(filePath).pipe(res);
+  fs.createReadStream(p).pipe(res);
 });
 
 const wss = new WebSocket.Server({ server });
-
-function send(ws, data) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(data));
-  }
-}
+const send = (ws, data) => {
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+};
 
 wss.on('connection', ws => {
   ws.id = Math.random().toString(36).slice(2, 10);
 
   ws.on('message', raw => {
-    let message;
+    let m;
+    try { m = JSON.parse(raw); } catch { return; }
 
-    try {
-      message = JSON.parse(raw.toString());
-    } catch {
-      return;
-    }
+    if (m.type === 'create') {
+      const c = String(m.code || '').toUpperCase();
+      if (!/^[A-Z0-9]{6}$/.test(c)) return send(ws, { type: 'error', message: 'Código inválido.' });
 
-    if (message.type === 'create') {
-      const code = String(message.code || '').toUpperCase();
+      let r = rooms.get(c) || { host: null, clients: new Set() };
+      if (r.host && r.host !== ws) return send(ws, { type: 'error', message: 'Sala já possui um transmissor.' });
 
-      if (!/^[A-Z0-9]{6}$/.test(code)) {
-        return send(ws, {
-          type: 'error',
-          message: 'Código inválido.'
-        });
-      }
-
-      let room = rooms.get(code);
-
-      if (!room) {
-        room = {
-          host: null,
-          clients: new Set()
-        };
-        rooms.set(code, room);
-      }
-
-      if (room.host && room.host !== ws) {
-        return send(ws, {
-          type: 'error',
-          message: 'Sala já possui um transmissor.'
-        });
-      }
-
-      room.host = ws;
-      room.clients.add(ws);
-
-      ws.room = code;
+      r.host = ws;
+      r.clients.add(ws);
+      rooms.set(c, r);
+      ws.room = c;
       ws.role = 'host';
-
-      return send(ws, {
-        type: 'created',
-        code,
-        viewers: room.clients.size - 1
-      });
+      return send(ws, { type: 'created', code: c, viewers: r.clients.size - 1 });
     }
 
-    if (message.type === 'join') {
-      const code = String(message.code || '').toUpperCase();
-      const room = rooms.get(code);
+    if (m.type === 'join') {
+      const c = String(m.code || '').toUpperCase();
+      const r = rooms.get(c);
+      if (!r || !r.host) return send(ws, { type: 'error', message: 'Sala não encontrada ou transmissão ainda não iniciada.' });
 
-      if (!room || !room.host) {
-        return send(ws, {
-          type: 'error',
-          message: 'Sala não encontrada ou transmissão ainda não iniciada.'
-        });
-      }
-
-      room.clients.add(ws);
-
-      ws.room = code;
+      r.clients.add(ws);
+      ws.room = c;
       ws.role = 'viewer';
-
-      send(ws, {
-        type: 'joined',
-        code,
-        hostId: room.host.id
-      });
-
-      send(room.host, {
-        type: 'viewer-joined',
-        viewerId: ws.id,
-        count: room.clients.size - 1
-      });
-
+      send(ws, { type: 'joined', code: c, hostId: r.host.id });
+      send(r.host, { type: 'viewer-joined', viewerId: ws.id, count: r.clients.size - 1 });
       return;
     }
 
-    const room = ws.room && rooms.get(ws.room);
+    const r = ws.room && rooms.get(ws.room);
+    if (!r) return;
 
-    if (!room) return;
-
-    if (['offer', 'answer', 'ice'].includes(message.type)) {
-      const target = [...room.clients].find(
-        client => client.id === message.target
-      );
-
-      if (target) {
-        send(target, {
-          ...message,
-          from: ws.id
-        });
+    if (m.type === 'host-ready' && ws === r.host) {
+      for (const client of r.clients) {
+        if (client !== r.host) send(client, { type: 'host-ready' });
       }
+      return;
+    }
+
+    if (m.type === 'viewer-ready' && ws.role === 'viewer') {
+      send(r.host, { type: 'viewer-joined', viewerId: ws.id, count: r.clients.size - 1 });
+      return;
+    }
+
+    if (['offer', 'answer', 'ice'].includes(m.type)) {
+      const target = [...r.clients].find(x => x.id === m.target);
+      if (target) send(target, { ...m, from: ws.id });
     }
   });
 
   ws.on('close', () => {
-    const room = ws.room && rooms.get(ws.room);
+    const r = ws.room && rooms.get(ws.room);
+    if (!r) return;
 
-    if (!room) return;
+    r.clients.delete(ws);
 
-    room.clients.delete(ws);
-
-    if (room.host === ws) {
-      for (const client of room.clients) {
-        send(client, {
-          type: 'host-left'
-        });
-      }
-
+    if (r.host === ws) {
+      for (const client of r.clients) send(client, { type: 'host-left' });
       rooms.delete(ws.room);
-    } else if (room.host) {
-      send(room.host, {
+    } else if (r.host) {
+      send(r.host, {
         type: 'viewer-left',
-        count: room.clients.size - 1,
+        count: r.clients.size - 1,
         viewerId: ws.id
       });
     }
@@ -182,5 +116,5 @@ wss.on('connection', ws => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`NVS Screen Share running on port ${PORT}`);
+  console.log('NVS Screen Share running on port ' + PORT);
 });
