@@ -18,6 +18,8 @@ const server=http.createServer((req,res)=>{
 const wss=new WebSocket.Server({server});
 const send=(ws,data)=>{if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(data))};
 function broadcast(room,data,except=null){for(const c of room.clients)if(c!==except)send(c,data)}
+function people(room){return [...room.clients].map(c=>({id:c.id,name:c.name||'NVS',role:c.role}))}
+function notifyPeople(room){broadcast(room,{type:'people',people:people(room)})}
 
 wss.on('connection',ws=>{
   ws.id=Math.random().toString(36).slice(2,10);
@@ -37,8 +39,8 @@ wss.on('connection',ws=>{
       const c=String(m.code||'').toUpperCase(),r=rooms.get(c);
       if(!r||!r.host)return send(ws,{type:'error',message:'Sala não encontrada ou transmissão ainda não iniciada.'});
       r.clients.add(ws);ws.room=c;ws.role='viewer';ws.name=String(m.name||'NVS').slice(0,18);
-      send(ws,{type:'joined',code:c,hostId:r.host.id});
-      send(r.host,{type:'viewer-joined',viewerId:ws.id,count:r.clients.size-1,name:ws.name});
+      send(ws,{type:'joined',code:c,hostId:r.host.id,people:people(r)});
+      broadcast(r,{type:'user-joined',name:ws.name,role:ws.role,viewerId:ws.id,people:people(r)},ws);
       return;
     }
 
@@ -60,8 +62,13 @@ wss.on('connection',ws=>{
   ws.on('close',()=>{
     const r=ws.room&&rooms.get(ws.room);if(!r)return;
     r.clients.delete(ws);
-    if(r.host===ws){broadcast(r,{type:'host-left'});rooms.delete(ws.room)}
-    else if(r.host)send(r.host,{type:'viewer-left',count:r.clients.size-1,viewerId:ws.id});
+    if(r.host===ws){
+      broadcast(r,{type:'host-left'});
+      rooms.delete(ws.room);
+    } else if(r.host){
+      send(r.host,{type:'viewer-left',count:r.clients.size-1,viewerId:ws.id});
+      broadcast(r,{type:'user-left',name:ws.name,role:ws.role,people:people(r)},null);
+    }
   });
 });
 server.listen(PORT,'0.0.0.0',()=>console.log('NVS Screen Share running on port '+PORT));

@@ -33,6 +33,28 @@ function addMessage(user,text,system=false){
   const p=document.createElement('p');p.textContent=text;
   b.append(strong,p);row.append(av,b);box.appendChild(row);box.scrollTop=box.scrollHeight;
 }
+function setPeople(list){
+  const host=list.find(x=>x.role==='host');
+  $('#count').textContent=list.length;
+  const side=$('.people');
+  side.querySelectorAll('.person:not(:first-child)').forEach(x=>x.remove());
+  list.forEach((p,i)=>{
+    if(i===0){
+      const el=side.querySelector('.person');
+      if(!el)return;
+      el.querySelector('.avatar').textContent=(p.name?.[0]||'N').toUpperCase();
+      el.querySelector('strong').textContent=p.name||'NVS';
+      el.querySelector('small').textContent=p.role==='host'?'● transmissor • você':'● espectador';
+      return;
+    }
+    const row=document.createElement('div');row.className='person';
+    row.innerHTML='<span class="avatar big"></span><div><strong></strong><small></small></div><span class="signal">▮▮▮</span>';
+    row.querySelector('.avatar').textContent=(p.name?.[0]||'N').toUpperCase();
+    row.querySelector('strong').textContent=p.name||'NVS';
+    row.querySelector('small').textContent=p.role==='host'?'● transmissor':'● espectador';
+    side.appendChild(row);
+  });
+}
 ws.onopen=()=>{
   setStatus('Conectado',true);
   const c=new URLSearchParams(location.search).get('room');
@@ -152,9 +174,32 @@ async function offerFor(id){
 ws.onmessage=async e=>{
   const m=JSON.parse(e.data);
   if(m.type==='error'){alert(m.message);return}
-  if(m.type==='created'){enterRoom();$('#roleText').textContent='● transmissor • você';addMessage('NVS','Sala criada. Envie o convite para quem vai assistir.',true)}
-  if(m.type==='joined'){enterRoom();$('#roleText').textContent='● espectador • você';addMessage('NVS','Você entrou na sala.',true)}
-  if(m.type==='viewer-joined'&&role==='host'){$('#count').textContent=m.count+1;if(processedStream)offerFor(m.viewerId)}
+  if(m.type==='created'){
+    enterRoom();$('#roleText').textContent='● transmissor • você';
+    setPeople([{name:name,role:'host'}]);
+    addMessage('NVS','Sala criada. Envie o convite para quem vai assistir.',true);
+  }
+  if(m.type==='joined'){
+    enterRoom();$('#roleText').textContent='● espectador • você';
+    if(m.people)setPeople(m.people);
+    addMessage('NVS','Você entrou na sala.',true);
+  }
+  if(m.type==='people'){
+    setPeople(m.people||[]);
+  }
+  if(m.type==='user-joined'){
+    setPeople(m.people||[]);
+    addMessage(m.name||'NVS','entrou na sala.',true);
+    if(role==='host' && m.viewerId && processedStream)offerFor(m.viewerId);
+  }
+  if(m.type==='user-left'){
+    setPeople(m.people||[]);
+    addMessage(m.name||'NVS','saiu da sala.',true);
+  }
+  if(m.type==='viewer-joined'&&role==='host'){
+    $('#count').textContent=(m.count||0)+1;
+    if(processedStream)offerFor(m.viewerId);
+  }
   if(m.type==='viewer-left'&&role==='host')$('#count').textContent=(m.count||0)+1;
   if(m.type==='chat')addMessage(m.name||'NVS',m.text||'');
   if(m.type==='host-ready'&&role==='viewer')send({type:'viewer-ready'});
