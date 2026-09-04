@@ -54,3 +54,8 @@ button{cursor:pointer}
 .stopshare:hover{background:#4a2028!important}
 .enable-audio{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:8;border:1px solid #5969ff;border-radius:12px;padding:13px 17px;background:#202b4c;color:#fff;font-weight:900;box-shadow:0 15px 40px #000b}
 .enable-audio:hover{background:#2c3a63}
+
+.permission-option{display:flex;align-items:center;gap:9px;margin:10px 0 4px;padding:12px;background:#101a2b;border:1px solid #34445e;border-radius:9px;color:#dbe2ed;font-size:12px;letter-spacing:0}
+.permission-option input{accent-color:#6470ff;width:16px;height:16px}
+.room-settings{height:38px;width:42px;border:1px solid #41526d;border-radius:9px;background:#34445d;color:#fff;font-weight:900}
+.room-settings:hover{background:#425573}

@@ -39,7 +39,7 @@
     <div class="room-actions">
       <button class="barbtn" id="activities">▦ <span>Atividades</span></button>
       <button class="barbtn" id="copyLink">↗ <span>Copiar convite</span></button>
-      <button class="more" id="more">•••</button>
+      <button class="more" id="more">•••</button><button class="room-settings" id="roomSettings" hidden>⚙</button>
     </div>
   </header>
 
@@ -104,6 +104,7 @@
     <h2>Criar uma sala</h2>
     <p>Escolha o nome que aparecerá para quem entrar na transmissão.</p>
     <input id="createNameInput" maxlength="18" placeholder="Seu nome" value="NVS">
+    <label class="permission-option"><input id="allowViewerShare" type="checkbox"> Permitir que outras pessoas compartilhem a tela</label>
     <button class="btn primary full" id="createGo">Criar sala</button>
   </div>
 </div>

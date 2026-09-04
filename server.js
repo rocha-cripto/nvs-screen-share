@@ -29,23 +29,42 @@ wss.on('connection',ws=>{
     if(m.type==='create'){
       const c=String(m.code||'').toUpperCase();
       if(!/^[A-Z0-9]{6}$/.test(c))return send(ws,{type:'error',message:'Código inválido.'});
-      let r=rooms.get(c)||{host:null,clients:new Set()};
+      let r=rooms.get(c)||{host:null,clients:new Set(),allowViewerShare:false};
       if(r.host&&r.host!==ws)return send(ws,{type:'error',message:'Sala já possui um transmissor.'});
-      r.host=ws;r.clients.add(ws);rooms.set(c,r);ws.room=c;ws.role='host';ws.name=String(m.name||'NVS').slice(0,18);
-      return send(ws,{type:'created',code:c,viewers:r.clients.size-1});
+      r.host=ws;r.clients.add(ws);r.allowViewerShare=!!m.allowViewerShare;rooms.set(c,r);ws.room=c;ws.role='host';ws.name=String(m.name||'NVS').slice(0,18);
+      return send(ws,{type:'created',code:c,viewers:r.clients.size-1,allowViewerShare:r.allowViewerShare});
     }
 
     if(m.type==='join'){
       const c=String(m.code||'').toUpperCase(),r=rooms.get(c);
       if(!r||!r.host)return send(ws,{type:'error',message:'Sala não encontrada ou transmissão ainda não iniciada.'});
       r.clients.add(ws);ws.room=c;ws.role='viewer';ws.name=String(m.name||'NVS').slice(0,18);
-      send(ws,{type:'joined',code:c,hostId:r.host.id,people:people(r)});
+      send(ws,{type:'joined',code:c,hostId:r.host.id,people:people(r),allowViewerShare:r.allowViewerShare});
       broadcast(r,{type:'user-joined',name:ws.name,role:ws.role,viewerId:ws.id,people:people(r)},ws);
       return;
     }
 
     const r=ws.room&&rooms.get(ws.room);if(!r)return;
 
+    if(m.type==='room-permission'&&ws===r.host){
+      r.allowViewerShare=!!m.allowViewerShare;
+      broadcast(r,{type:'room-permission',allowViewerShare:r.allowViewerShare},r.host);
+      return;
+    }
+    if(m.type==='viewer-share-started'&&ws.role==='viewer'){
+      if(!r.allowViewerShare)return send(ws,{type:'error',message:'O criador da sala não permitiu compartilhamento.'});
+      broadcast(r,{type:'viewer-share-started',sharerId:ws.id,name:ws.name},ws);
+      return;
+    }
+    if(m.type==='share-viewer-ready'){
+      const target=[...r.clients].find(x=>x.id===m.target);
+      if(target && target.role==='viewer' && r.allowViewerShare)send(target,{type:'share-viewer-ready',from:ws.id});
+      return;
+    }
+    if(m.type==='share-stopped'&&ws.role==='viewer'){
+      broadcast(r,{type:'share-stopped',sharerId:ws.id,name:ws.name},ws);
+      return;
+    }
     if(m.type==='host-ready'&&ws===r.host){broadcast(r,{type:'host-ready'},r.host);return}
     if(m.type==='viewer-ready'&&ws.role==='viewer'){send(r.host,{type:'viewer-joined',viewerId:ws.id,count:r.clients.size-1,name:ws.name});return}
 

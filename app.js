@@ -2,6 +2,7 @@ const $=s=>document.querySelector(s);
 const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host);
 let role=null,code=null,name='NVS',sourceStream=null,processedStream=null,canvas=null,ctx=null,sourceVideo=null,renderTimer=null,pcs=new Map();
 let cfg={w:1280,h:720,f:30};
+let allowViewerShare=false;
 
 function send(x){if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(x))}
 function setStatus(text,ok=false){
@@ -15,6 +16,7 @@ function openModal(v=''){
 }
 function enterRoom(){
   $('#landing').hidden=true; $('#roomApp').hidden=false;
+  $('#roomSettings').hidden = role!=='host';
   $('#roomCode').textContent=code;
   $('#username').textContent=name; $('#sideName').textContent=name;
   const initial=(name.trim()[0]||'N').toUpperCase();
@@ -70,7 +72,9 @@ $('#create').onclick=()=>{
 $('#createClose').onclick=()=>$('#createModal').hidden=true;
 $('#createGo').onclick=()=>{
   name=($('#createNameInput').value.trim()||'NVS').slice(0,18);
-  role='host'; code=rnd(); $('#createModal').hidden=true; send({type:'create',code,name});
+  allowViewerShare=$('#allowViewerShare').checked;
+  role='host'; code=rnd(); $('#createModal').hidden=true;
+  send({type:'create',code,name,allowViewerShare});
 };
 $('#createNameInput').onkeydown=e=>{if(e.key==='Enter')$('#createGo').click()};
 $('#join').onclick=()=>openModal();
@@ -88,6 +92,21 @@ $('#copyLink').onclick=async()=>{await navigator.clipboard.writeText(location.or
 $('#leave').onclick=()=>location.href=location.pathname;
 $('#activities').onclick=()=>addMessage('NVS','Atividades: transmissão P2P, qualidade '+(cfg.w===1920?'1080p':'720p')+' / '+cfg.f+' FPS.',true);
 $('#more').onclick=()=>addMessage('NVS','Sala '+code+' • '+name,true);
+
+$('#roomSettings').onclick=()=>{
+  if(role!=='host')return;
+  const ok=confirm(allowViewerShare
+    ? 'Compartilhamento de tela para outras pessoas está ATIVADO.\n\nOK = manter ativado\nCancelar = desativar');
+  if(ok){
+    allowViewerShare=true;
+  }else{
+    allowViewerShare=false;
+    send({type:'room-permission',allowViewerShare:false});
+  }
+  send({type:'room-permission',allowViewerShare});
+  addMessage('NVS',allowViewerShare?'Outras pessoas podem compartilhar a tela.':'Somente o transmissor pode compartilhar a tela.',true);
+};
+
 
 function setQuality(btn){
   document.querySelectorAll('.q').forEach(x=>x.classList.remove('active'));btn.classList.add('active');
@@ -163,7 +182,7 @@ async function rebuildProcessedStream(){
   }
 }
 $('#share').onclick=async()=>{
-  if(role!=='host')return alert('Somente o criador da sala pode compartilhar a tela.');
+  if(role!=='host' && !allowViewerShare)return alert('O criador da sala não permitiu que espectadores compartilhem a tela.');
   try{
     const wantAudio=$('#audio').checked;
     sourceStream=await navigator.mediaDevices.getDisplayMedia({
@@ -177,7 +196,11 @@ $('#share').onclick=async()=>{
     const vt=sourceStream.getVideoTracks()[0];
     if(!vt)throw new Error('Sem vídeo');
     await rebuildProcessedStream();
-    send({type:'host-ready',hasAudio:sourceStream.getAudioTracks().length>0});
+    if(role==='host'){
+      send({type:'host-ready',hasAudio:sourceStream.getAudioTracks().length>0});
+    }else{
+      send({type:'viewer-share-started',name});
+    }
     vt.onended=()=>stop(true);
     addMessage('NVS','Você começou a compartilhar a tela.',true);
     if(wantAudio && sourceStream.getAudioTracks().length===0){
@@ -225,7 +248,10 @@ function stop(notify=false){
   $('#stopShare').hidden=true;
   $('#enableAudio').hidden=true;
   $('#welcomeText').textContent=role==='host'?'Compartilhe sua tela usando a barra de baixo.':'Aguardando o transmissor iniciar a tela.';
-  if(notify && role==='host')send({type:'host-stopped'});
+  if(notify){
+    if(role==='host')send({type:'host-stopped'});
+    else send({type:'share-stopped',name});
+  }
 }
 async function offerFor(id){
   if(!processedStream)return;
@@ -246,11 +272,13 @@ ws.onmessage=async e=>{
   const m=JSON.parse(e.data);
   if(m.type==='error'){alert(m.message);return}
   if(m.type==='created'){
+    allowViewerShare=!!m.allowViewerShare;
     enterRoom();$('#roleText').textContent='● transmissor • você';
     setPeople([{name:name,role:'host'}]);
     addMessage('NVS','Sala criada. Envie o convite para quem vai assistir.',true);
   }
   if(m.type==='joined'){
+    allowViewerShare=!!m.allowViewerShare;
     enterRoom();$('#roleText').textContent='● espectador • você';
     if(m.people)setPeople(m.people);
     addMessage('NVS','Você entrou na sala.',true);
@@ -275,21 +303,37 @@ ws.onmessage=async e=>{
   if(m.type==='chat')addMessage(m.name||'NVS',m.text||'');
   if(m.type==='host-ready'&&role==='viewer')send({type:'viewer-ready'});
   if(m.type==='host-stopped'&&role==='viewer'){const v=$('#video');v.srcObject=null;v.muted=true;$('#empty').style.display='flex';$('#liveBadge').hidden=true;$('#enableAudio').hidden=true;$('#welcomeText').textContent='O transmissor parou de compartilhar a tela.';}
-  if(m.type==='offer'&&role==='viewer'){
+  if(m.type==='share-viewer-ready' && sourceStream && role==='viewer' && m.from){
+    offerFor(m.from);
+  }
+  if(m.type==='room-permission'){
+    allowViewerShare=!!m.allowViewerShare;
+    addMessage('NVS',allowViewerShare?'O criador permitiu compartilhamento para espectadores.':'O criador desativou o compartilhamento para espectadores.',true);
+  }
+  if(m.type==='viewer-share-started'){
+    send({type:'share-viewer-ready',target:m.sharerId});
+    addMessage(m.name||'NVS','começou a compartilhar a tela.',true);
+  }
+  if(m.type==='share-stopped'){
+    const old=pcs.get(m.sharerId);
+    if(old)old.close(); pcs.delete(m.sharerId);
+    addMessage(m.name||'NVS','parou de compartilhar a tela.',true);
+  }
+  if(m.type==='offer'){
     const pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});pcs.set(m.from,pc);
     pc.ontrack=e=>{
       const video=$('#video');
       video.srcObject=e.streams[0];
-      video.muted=false;
-      video.volume=1;
-      $('#empty').style.display='none';
-      $('#liveBadge').hidden=false;
+      video.muted=false; video.volume=1;
+      $('#empty').style.display='none'; $('#liveBadge').hidden=false;
       $('#welcomeText').textContent='Transmissão ao vivo';
       video.play().then(()=>{$('#enableAudio').hidden=true}).catch(()=>{$('#enableAudio').hidden=false});
     };
     pc.onicecandidate=e=>{if(e.candidate)send({type:'ice',target:m.from,candidate:e.candidate})};
     pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState))pcs.delete(m.from)};
-    await pc.setRemoteDescription(m.offer);const ans=await pc.createAnswer();await pc.setLocalDescription(ans);send({type:'answer',target:m.from,answer:ans})
+    await pc.setRemoteDescription(m.offer);
+    const ans=await pc.createAnswer();await pc.setLocalDescription(ans);
+    send({type:'answer',target:m.from,answer:ans})
   }
   if(m.type==='answer'){const pc=pcs.get(m.from);if(pc)await pc.setRemoteDescription(m.answer)}
   if(m.type==='ice'){const pc=pcs.get(m.from);if(pc)try{await pc.addIceCandidate(m.candidate)}catch{}}
