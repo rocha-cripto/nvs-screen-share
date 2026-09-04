@@ -95,8 +95,11 @@ $('#more').onclick=()=>addMessage('NVS','Sala '+code+' • '+name,true);
 
 $('#roomSettings').onclick=()=>{
   if(role!=='host')return;
-  const ok=confirm(allowViewerShare
-    ? 'Compartilhamento de tela para outras pessoas está ATIVADO.\n\nOK = manter ativado\nCancelar = desativar');
+  const ok=confirm(
+    allowViewerShare
+      ? 'Compartilhamento de tela para outras pessoas está ATIVADO.\n\nOK = manter ativado\nCancelar = desativar'
+      : 'Compartilhamento de tela para outras pessoas está DESATIVADO.\n\nOK = manter desativado\nCancelar = ativar'
+  );
   if(ok){
     allowViewerShare=true;
   }else{
