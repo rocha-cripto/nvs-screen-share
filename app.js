@@ -41,9 +41,16 @@ ws.onopen=()=>{
 ws.onclose=()=>setStatus('Desconectado');
 
 $('#create').onclick=()=>{
-  name=($('#nameInput').value.trim()||'NVS').slice(0,18);
-  role='host'; code=rnd(); send({type:'create',code,name});
+  $('#createModal').hidden=false;
+  $('#createNameInput').focus();
+  $('#createNameInput').select();
 };
+$('#createClose').onclick=()=>$('#createModal').hidden=true;
+$('#createGo').onclick=()=>{
+  name=($('#createNameInput').value.trim()||'NVS').slice(0,18);
+  role='host'; code=rnd(); $('#createModal').hidden=true; send({type:'create',code,name});
+};
+$('#createNameInput').onkeydown=e=>{if(e.key==='Enter')$('#createGo').click()};
 $('#join').onclick=()=>openModal();
 $('#close').onclick=()=>$('#modal').hidden=true;
 $('#go').onclick=()=>{
